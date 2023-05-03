@@ -6,7 +6,7 @@ use clap::{Args, Parser};
 pub struct CliArgs {
     /// Verbose output
     #[clap(flatten)]
-    verbose: clap_verbosity_flag::Verbosity,
+    pub verbose: clap_verbosity_flag::Verbosity,
 
     /// The path to a file to read
     #[arg(short, long)]

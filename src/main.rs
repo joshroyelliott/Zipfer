@@ -1,46 +1,95 @@
+// TODO: add regex parsing
+// TODO: add character sequence parsing
+
 #![allow(unused)]
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info, trace, warn};
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
+use std::error::Error;
 use std::io;
+use std::process;
 use std::time::Instant;
 
 mod args;
 
 use args::CliArgs;
 use clap::Parser;
+use clap_verbosity_flag::Verbosity;
 
 fn get_input(args: &CliArgs) -> Result<String> {
+    // Input is file if provided or stdin
     let input = if let Some(filepath) = &args.path {
-        let file = std::fs::read_to_string(&filepath)
-            .with_context(|| format!("could not read file `{}`", filepath.display()))?;
-        file
+        std::fs::read_to_string(&filepath)?
     } else {
-        let stdin = io::read_to_string(io::stdin())?;
-        stdin
+        io::read_to_string(io::stdin())?
     };
     Ok(input)
 }
 
-fn count_words(text: &str) -> Vec<(String, u32)> {
-    let mut counts: HashMap<String, u32> = HashMap::new();
-
+fn tokenize_input(text: &str) -> Result<Vec<String>, Box<dyn Error>> {
     // Split the text into words using whitespace and punctuation as delimiters
-    let words = text
+    let tokens: Vec<(String)> = text
         .split(|c: char| !c.is_alphabetic())
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    Ok(tokens)
+}
 
-    let mut counter = 0;
-    for word in words {
-        *counts.entry(word.to_lowercase()).or_insert(0) += 1;
-        counter += 1;
+fn count_words(text: &str, args: &CliArgs) -> Result<Vec<(String, u32)>, Box<dyn Error>> {
+    let start = Instant::now(); // start measuring time
+
+    // Get tokens
+    let tokens = tokenize_input(text)?;
+
+    let mut total = 0;
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    // Accumulation of counts from tokens
+
+    // Create a progress bar if the verbose flag is set
+    let progress_bar = if args.verbose.log_level_filter() >= log::LevelFilter::Info {
+        let progress_bar = ProgressBar::new(tokens.len() as u64);
+        progress_bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{msg} {bar:40.cyan/blue} {pos}/{len} {elapsed_precise}")?
+                .progress_chars("=> "),
+        );
+        Some(progress_bar)
+    } else {
+        None
+    };
+
+    for token in &tokens {
+        *counts.entry(token.to_lowercase()).or_insert(0) += 1;
+
+        // Update progress bar if it exists
+        if let Some(pb) = &progress_bar {
+            pb.inc(1);
+        }
     }
+
     // Convert the HashMap into a vector of tuples and return it
     let mut word_counts: Vec<(String, u32)> = counts.into_iter().collect();
     word_counts.sort_by(|a, b| b.1.cmp(&a.1)); // sort by count in descending order
 
-    word_counts
+    let duration = start.elapsed();
+
+    // Print verbose output if the verbose flag is set
+    if let Some(pb) = progress_bar {
+        pb.finish_with_message(format!(
+            "Finished counting {} tokens in {:.2}s",
+            tokens.len(),
+            duration.as_secs_f32()
+        ));
+    }
+    if args.verbose.log_level_filter() >= log::LevelFilter::Info {
+        println!("Total tokens: {}", tokens.len());
+        println!("Time taken: {:.2}s", duration.as_secs_f32());
+    }
+
+    Ok(word_counts)
 }
 
 fn main() -> Result<()> {
@@ -51,23 +100,10 @@ fn main() -> Result<()> {
     let args = CliArgs::parse();
     trace!("passed args: {:?}", args);
 
-    let start = Instant::now(); // start measuring time
-
-    // Input is file if provided or stdin
-    let input = match get_input(&args) {
-        Ok(input) => {
-            trace!("collected input");
-            input
-        }
-        Err(error) => {
-            error!("Error: {}", error);
-            return Err(error);
-        }
-    };
-
-    let counts = count_words(&input);
-
-    let duration = start.elapsed();
+    // Get input from args
+    let input = get_input(&args)?;
+    // Count words based on args
+    let counts = count_words(&input, &args).unwrap();
 
     println!("{:<5}{:<15}{}", "No.", "Word", "Count");
     for (i, (word, count)) in counts.iter().enumerate().take(args.number) {
